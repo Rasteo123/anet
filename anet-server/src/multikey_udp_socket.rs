@@ -152,23 +152,35 @@ impl AsyncUdpSocket for MultiKeyAnetUdpSocket {
                                     &client_info.cipher,
                                     raw_packet_mut,
                                 ) {
-                                    Ok(quic_payload) => {
-                                        // УРА! Это пакет для Quinn (данные туннеля)
-                                        let buf = &mut bufs[i];
-                                        let copy_len = quic_payload.len().min(buf.len());
-                                        buf[..copy_len].copy_from_slice(&quic_payload[..copy_len]);
-
-                                        meta[i] = RecvMeta {
-                                            addr: remote_addr,
-                                            len: copy_len,
-                                            stride: copy_len,
-                                            dst_ip: None,
-                                            ecn: None,
-                                        };
-
-                                        count += 1;
-                                        i += 1; // Переходим к следующему слоту Quinn
+                                    Ok((seq, quic_payload)) => {
+                                        // Пакет принадлежит сессии — не отправлять в auth,
+                                        // даже если replay-проверка не пройдёт.
                                         packet_for_quinn = true;
+
+                                        // Проверяем replay-окно (64-битная маска)
+                                        if !client_info.replay_window.check_and_update(seq) {
+                                            warn!(
+                                                "[Socket] Replay detected from {}: seq={} already seen or too old, dropping",
+                                                remote_addr, seq
+                                            );
+                                            // Дублированный пакет — молча отбрасываем
+                                        } else {
+                                            // Новый пакет — передаём в Quinn
+                                            let buf = &mut bufs[i];
+                                            let copy_len = quic_payload.len().min(buf.len());
+                                            buf[..copy_len].copy_from_slice(&quic_payload[..copy_len]);
+
+                                            meta[i] = RecvMeta {
+                                                addr: remote_addr,
+                                                len: copy_len,
+                                                stride: copy_len,
+                                                dst_ip: None,
+                                                ecn: None,
+                                            };
+
+                                            count += 1;
+                                            i += 1;
+                                        }
                                     }
                                     Err(e) => {
                                         warn!(

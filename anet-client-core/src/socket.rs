@@ -130,7 +130,7 @@ impl AsyncUdpSocket for AnetUdpSocket {
 
                     // Пытаемся расшифровать
                     match transport::unwrap_packet_in_place(&self.cipher, raw_packet_mut) {
-                        Ok(quic_payload) => {
+                        Ok((_seq, quic_payload)) => {
                             let copy_len = std::cmp::min(quic_payload.len(), buf.len());
                             buf[..copy_len].copy_from_slice(&quic_payload[..copy_len]);
 

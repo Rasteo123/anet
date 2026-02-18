@@ -67,8 +67,8 @@ pub fn unwrap_packet(cipher: &Cipher, raw_packet: &[u8]) -> Result<Bytes> {
 
 /// Расшифровывает пакет на месте (без выделения памяти).
 /// buffer: полный пакет (Nonce + Ciphertext + Tag).
-/// Возвращает срез с полезной нагрузкой (Quic Payload).
-pub fn unwrap_packet_in_place<'a>(cipher: &Cipher, buffer: &'a mut [u8]) -> Result<&'a [u8]> {
+/// Возвращает (sequence, срез с полезной нагрузкой).
+pub fn unwrap_packet_in_place<'a>(cipher: &Cipher, buffer: &'a mut [u8]) -> Result<(u64, &'a [u8])> {
     // 16 байт - размер тега Poly1305
     if buffer.len() < NONCE_LEN + 16 {
         return Err(anyhow!("Packet too short"));
@@ -94,6 +94,12 @@ pub fn unwrap_packet_in_place<'a>(cipher: &Cipher, buffer: &'a mut [u8]) -> Resu
         return Err(anyhow!("Payload too short (header missing)"));
     }
 
+    // Читаем sequence (первые 8 байт) для проверки replay
+    let seq = u64::from_be_bytes([
+        plaintext[0], plaintext[1], plaintext[2], plaintext[3],
+        plaintext[4], plaintext[5], plaintext[6], plaintext[7],
+    ]);
+
     // Читаем длину (offset 8, 2 байта) вручную, чтобы не использовать Buf
     let data_len = u16::from_be_bytes([plaintext[8], plaintext[9]]) as usize;
 
@@ -101,6 +107,6 @@ pub fn unwrap_packet_in_place<'a>(cipher: &Cipher, buffer: &'a mut [u8]) -> Resu
         return Err(anyhow!("Malformed packet length"));
     }
 
-    // Возвращаем срез чистого пейлоуда
-    Ok(&plaintext[10..10 + data_len])
+    // Возвращаем sequence и срез чистого пейлоуда
+    Ok((seq, &plaintext[10..10 + data_len]))
 }

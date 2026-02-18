@@ -1,5 +1,5 @@
 use crate::auth_provider::AuthProvider;
-use crate::client_registry::{ClientRegistry, ClientTransportInfo};
+use crate::client_registry::{ClientRegistry, ClientTransportInfo, ReplayWindow};
 use crate::multikey_udp_socket::{HandshakeData, TempDHInfo};
 use crate::utils::{generate_seid, generate_unique_nonce_prefix};
 use anet_common::consts::{NONCE_LEN, PROTO_PAD_FIELD_OVERHEAD};
@@ -221,6 +221,7 @@ impl ServerAuthHandler {
             session_id: session_id.clone(),
             nonce_prefix,
             remote_addr: ArcSwap::new(Arc::new(remote_addr)),
+            replay_window: ReplayWindow::new(),
         });
 
         self.registry.pre_register_client(client_info);

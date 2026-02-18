@@ -6,8 +6,65 @@ use bytes::Bytes;
 use dashmap::DashMap;
 use log::{info, warn};
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::AtomicU64;
+
+/// Скользящее окно для защиты от replay-атак (64-битная битовая маска, аналог IPsec).
+///
+/// Алгоритм:
+/// - `top`    — наибольший принятый sequence
+/// - `window` — битовая маска: бит N установлен, если пакет (top - N) был принят
+///
+/// Пакет принимается, если:
+///   1. seq > top        — новый максимум, сдвигаем окно вперёд
+///   2. seq >= top - 63  — в пределах окна и бит ещё не установлен
+///
+/// Пакет отклоняется, если:
+///   - seq < top - 63    — слишком старый (за границей окна)
+///   - бит уже установлен — дублированный/replay пакет
+pub struct ReplayWindow {
+    inner: Mutex<(u64, u64)>, // (top_seq, bitmask)
+}
+
+impl ReplayWindow {
+    pub fn new() -> Self {
+        Self {
+            inner: Mutex::new((0, 0)),
+        }
+    }
+
+    /// Возвращает `true`, если sequence принять можно, и обновляет окно.
+    /// Возвращает `false` при replay или слишком старом пакете.
+    pub fn check_and_update(&self, seq: u64) -> bool {
+        let mut guard = self.inner.lock().unwrap();
+        let (top, window) = &mut *guard;
+
+        if seq > *top {
+            // Новый максимум — сдвигаем окно
+            let shift = seq - *top;
+            *window = if shift >= 64 {
+                1u64 // все старые биты выпали за границу
+            } else {
+                (*window << shift) | 1u64
+            };
+            *top = seq;
+            true
+        } else if *top >= 64 && seq < *top - 63 {
+            // Пакет старее 64 позиций — отклоняем
+            false
+        } else {
+            // Внутри окна — проверяем бит
+            let offset = *top - seq;
+            let mask = 1u64 << offset;
+            if *window & mask != 0 {
+                false // уже видели — replay
+            } else {
+                *window |= mask;
+                true
+            }
+        }
+    }
+}
 
 pub struct ClientTransportInfo {
     pub cipher: Arc<Cipher>,
@@ -16,6 +73,7 @@ pub struct ClientTransportInfo {
     pub session_id: String,
     pub nonce_prefix: [u8; 4],
     pub remote_addr: ArcSwap<SocketAddr>,
+    pub replay_window: ReplayWindow,
 }
 
 #[derive(Clone)]
